@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+  <h2>Resultados de la validación</h2>
+
+  {% if pasa %}
+    <div class="alert alert-success"><strong>¡Validación aprobada!</strong></div>
+  {% else %}
+    <div class="alert alert-warning"><strong>El archivo necesita ser revisado, contiene los siguientes errores:</strong></div>
+  {% endif %}
+
+  <a href="{{ url_for('descargar_pdf', token=token, nombre=nombre_archivo) }}" class="btn btn-default">Descargar PDF institucional</a>
+
+  <hr/>
+  <div class="panel panel-default">
+    <div class="panel-heading"><strong>Observaciones de Formato</strong></div>
+    <div class="panel-body"><ul>{% for o in FINAL.formato %}<li>{{ o }}</li>{% endfor %}</ul></div>
+  </div>
+
+  <div class="panel panel-default">
+    <div class="panel-heading"><strong>Observaciones del Nombre del Archivo</strong></div>
+    <div class="panel-body"><ul>{% for o in FINAL.archivo %}<li>{{ o }}</li>{% endfor %}</ul></div>
+  </div>
+
+  <div class="panel panel-default">
+    <div class="panel-heading"><strong>Observaciones de Nombres de Columnas</strong></div>
+    <div class="panel-body"><ul>{% for o in FINAL.columnas %}<li>{{ o }}</li>{% endfor %}</ul></div>
+  </div>
+
+  <div class="panel panel-default">
+    <div class="panel-heading"><strong>Observaciones de Filas/Datos</strong></div>
+    <div class="panel-body"><ul>{% for o in FINAL.datos %}<li>{{ o }}</li>{% endfor %}</ul></div>
+  </div>
+{% endblock %}

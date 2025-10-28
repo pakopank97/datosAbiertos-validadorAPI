@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <div class="col-sm-8">
+    <h2>Cargar archivo para validar</h2>
+    <p>Formatos permitidos: CSV o XLSX. El archivo no debe tener múltiples hojas y debe cumplir con UTF-8 (CSV).</p>
+    <form action="{{ url_for('validar') }}" method="post" enctype="multipart/form-data" class="well">
+      <div class="form-group">
+        <label for="archivo">Selecciona el archivo</label>
+        <input type="file" name="archivo" id="archivo" class="form-control">
+      </div>
+      <button type="submit" class="btn btn-primary">Validar</button>
+    </form>
+    {% if error %}
+      <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+  </div>
+  <div class="col-sm-4">
+    <h3>¿Qué valida?</h3>
+    <ul>
+      <li><strong>Formato:</strong> UTF-8 (CSV), una sola hoja (XLSX), sin columnas vacías.</li>
+      <li><strong>Nombre del archivo:</strong> sin ñ/tildes, sin espacios, minúsculas salvo siglas.</li>
+      <li><strong>Columnas:</strong> sin ñ/tildes, sin espacios/saltos; máx. 5 palabras; sin “id” ni sufijo “_1”.</li>
+      <li><strong>Datos:</strong> sin espacios al inicio/fin; fechas ISO 8601; numéricos sin símbolos; categorías coherentes.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}
