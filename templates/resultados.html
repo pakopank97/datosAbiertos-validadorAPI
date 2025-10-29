@@ -1,33 +1,46 @@
 {% extends "base.html" %}
+{% block title %}Resultados — Validador de Datos Abiertos{% endblock %}
+
 {% block content %}
-  <h2>Resultados de la validación</h2>
+<div class="row">
+  <div class="col-md-6 col-md-offset-3 text-center">
+    <section class="well" style="background:#fff; padding:50px; border-radius:8px; margin-top:60px;">
+      <h2 style="color:#7B1733; font-weight:700; margin-bottom:10px;">
+        Validación completada
+      </h2>
 
-  {% if pasa %}
-    <div class="alert alert-success"><strong>¡Validación aprobada!</strong></div>
-  {% else %}
-    <div class="alert alert-warning"><strong>El archivo necesita ser revisado, contiene los siguientes errores:</strong></div>
-  {% endif %}
+      <!-- Estado de la validación -->
+      {% if pasa %}
+        <p style="color:#0c6b37; font-size:17px; font-weight:bold; margin-bottom:25px;">
+          ✅ El archivo es válido. No se encontraron observaciones.
+        </p>
+      {% else %}
+        <p style="color:#a61c2d; font-size:17px; font-weight:bold; margin-bottom:25px;">
+          ⚠️ El archivo contiene observaciones que deben corregirse.
+        </p>
+      {% endif %}
 
-  <a href="{{ url_for('descargar_pdf', token=token, nombre=nombre_archivo) }}" class="btn btn-default">Descargar PDF institucional</a>
+      <!-- Botón principal de descarga -->
+      <a href="{{ url_for('descargar_pdf', token=token, nombre=nombre_archivo) }}"
+         class="btn btn-primary btn-lg"
+         style="background-color:#7B1733; border:none; font-size:18px; padding:12px 35px;">
+        <span class="icon icon-download" aria-hidden="true"></span>
+        Descargar reporte en PDF
+      </a>
 
-  <hr/>
-  <div class="panel panel-default">
-    <div class="panel-heading"><strong>Observaciones de Formato</strong></div>
-    <div class="panel-body"><ul>{% for o in FINAL.formato %}<li>{{ o }}</li>{% endfor %}</ul></div>
+      <!-- Leyenda explicativa -->
+      <p style="margin-top:30px; font-size:16px; color:#333;">
+        Soluciona las observaciones que se encontraron en tu archivo,<br>
+        para que lo puedas validar de nuevo más tarde.
+      </p>
+
+      <!-- Botón pequeño "Atrás" -->
+      <a href="{{ url_for('index') }}"
+         class="btn btn-default"
+         style="margin-top:15px; font-size:15px;">
+        Atrás
+      </a>
+    </section>
   </div>
-
-  <div class="panel panel-default">
-    <div class="panel-heading"><strong>Observaciones del Nombre del Archivo</strong></div>
-    <div class="panel-body"><ul>{% for o in FINAL.archivo %}<li>{{ o }}</li>{% endfor %}</ul></div>
-  </div>
-
-  <div class="panel panel-default">
-    <div class="panel-heading"><strong>Observaciones de Nombres de Columnas</strong></div>
-    <div class="panel-body"><ul>{% for o in FINAL.columnas %}<li>{{ o }}</li>{% endfor %}</ul></div>
-  </div>
-
-  <div class="panel panel-default">
-    <div class="panel-heading"><strong>Observaciones de Filas/Datos</strong></div>
-    <div class="panel-body"><ul>{% for o in FINAL.datos %}<li>{{ o }}</li>{% endfor %}</ul></div>
-  </div>
+</div>
 {% endblock %}

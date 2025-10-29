@@ -1,28 +1,25 @@
 <!DOCTYPE html>
 <html lang="es">
   <head>
-    <meta charset="utf-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Validador de Datos Abiertos</title>
-    <link rel="stylesheet" href="https://framework-gb.cdn.gob.mx/assets/styles/main.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Validador de Datos Abiertos{% endblock %}</title>
+
+    <!-- Framework oficial GOB.mx v3 -->
+    <link href="https://framework-gb.cdn.gob.mx/gm/v3/assets/images/favicon.ico" rel="shortcut icon">
+    <link href="https://framework-gb.cdn.gob.mx/gm/v3/assets/styles/main.css" rel="stylesheet">
   </head>
+
   <body>
-    <header class="navbar navbar-inverse navbar-static-top">
+    <!-- Contenido principal -->
+    <main class="page">
       <div class="container">
-        <div class="navbar-header">
-          <a class="navbar-brand" href="{{ url_for('index') }}">Validador de Datos Abiertos</a>
-        </div>
+        {% block content %}{% endblock %}
       </div>
-    </header>
-    <main class="container">
-      {% block content %}{% endblock %}
     </main>
-    <footer class="footer">
-      <div class="container">
-        <p>Acuse institucional de validación — uso interno.</p>
-      </div>
-    </footer>
+
+    <!-- Scripts oficiales -->
+    <script src="https://framework-gb.cdn.gob.mx/gm/v3/assets/js/gobmx.js"></script>
   </body>
 </html>

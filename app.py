@@ -1,46 +1,34 @@
 # -*- coding: utf-8 -*-
 """
 Sistema: API-Validador-Formatos-Datos-Abiertos
-Autor: Mtro. Francisco Daniel Martínez Martínez — Jefe de Departamento de Procesos Orientados a la Transparencia
-Tecnologías: Flask, Polars, OpenPyXL, ReportLab
-Versión: v5 (acuse institucional PDF no editable, numerador automático de oficio, solo descarga PDF)
+Autor: Mtro. Francisco Daniel Martínez Martínez
+Versión: v8.7 (texto derecho y logo derecho ajustado)
 """
 import io, os, re, json
 from datetime import datetime
 from flask import Flask, request, render_template, send_file
 from werkzeug.utils import secure_filename
 import polars as pl
-
-# ReportLab
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 
-# ---------------- Config ----------------
-ALLOWED_EXTENSIONS = {"csv", "xls", "xlsx"}
+# ---------------- CONFIG ----------------
 UPLOAD_FOLDER = "uploads"
 RESULTS_FOLDER = "resultados"
 LOGOS_FOLDER = "logos"
-OFICIO_PREFIJO = "253"  # fijo, por instrucción
+ALLOWED_EXTENSIONS = {"csv", "xls", "xlsx"}
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULTS_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256MB
 
-ART_PREP = {"de","la","del","el","en","para","por","DE","LA","DEL","EL","EN","PARA","POR"}
-
-# --------- Utilidades ----------
+# ---------------- UTILIDADES ----------------
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def split_words_underscore(name: str) -> int:
-    return len([p for p in name.split("_") if p])
-
-def detect_iso8601_strict(s: str) -> bool:
-    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", s))
 
 def is_utf8(file_bytes: bytes) -> bool:
     try:
@@ -49,55 +37,32 @@ def is_utf8(file_bytes: bytes) -> bool:
     except UnicodeDecodeError:
         return False
 
-def generar_no_oficio():
-    """Genera y persiste un No. de Oficio: 253.-0001-YYYY"""
-    contador_path = os.path.join(RESULTS_FOLDER, "contador_oficios.txt")
-    try:
-        with open(contador_path, "r", encoding="utf-8") as f:
-            consecutivo = int(f.read().strip())
-    except Exception:
-        consecutivo = 0
-    consecutivo += 1
-    with open(contador_path, "w", encoding="utf-8") as f:
-        f.write(str(consecutivo))
-    año = datetime.now().year
-    return f"{OFICIO_PREFIJO}.-{consecutivo:04d}-{año}"
+def split_words_underscore(name: str) -> int:
+    return len([p for p in name.split("_") if p])
 
-# ---------------- Validadores ----------------
+# ---------------- VALIDADORES ----------------
 def validar_formato_y_carga(file_storage, filename, ext):
     obs = []
     if ext in ("xls", "xlsx"):
         import openpyxl
         wb = openpyxl.load_workbook(file_storage, read_only=True, data_only=True)
-        sheetnames = wb.sheetnames
-        if len(sheetnames) != 1:
-            obs.append(f"El archivo no tiene el formato correcto y tiene {len(sheetnames)} hojas.")
-        ws = wb[sheetnames[0]]
+        ws = wb[wb.sheetnames[0]]
         rows = list(ws.values)
-        if not rows:
-            df = pl.DataFrame()
-        else:
-            headers = [str(h) if h is not None else "" for h in rows[0]]
-            data = rows[1:]
-            df = pl.DataFrame(data, schema=[h if h != "None" else "" for h in headers])
+        headers = [str(h) if h else "" for h in rows[0]] if rows else []
+        data = rows[1:] if len(rows) > 1 else []
+        df = pl.DataFrame(data, schema=headers) if headers else pl.DataFrame()
         empty_headers = [h for h in df.columns if (h is None or str(h).strip() in ("", " "))]
         if empty_headers:
             obs.append(f"Se encuentran {len(empty_headers)} variables sin nombre. Revisar el contenido de estas variables.")
         return obs, df
 
-    # CSV (acepta FileStorage o BytesIO)
-    if isinstance(file_storage, io.BytesIO):
-        file_bytes = file_storage.getvalue()
-        file_stream = io.BytesIO(file_bytes)
-    else:
-        file_bytes = file_storage.read()
-        file_stream = io.BytesIO(file_bytes)
-
+    # CSV
+    file_bytes = file_storage.read()
     if not is_utf8(file_bytes):
         obs.append("La codificación no es la correcta, debe ser 'UTF-8'.")
-
+    stream = io.BytesIO(file_bytes)
     try:
-        df = pl.read_csv(file_stream, infer_schema_length=2000, ignore_errors=True)
+        df = pl.read_csv(stream, infer_schema_length=2000, ignore_errors=True)
     except Exception as e:
         obs.append(f"No fue posible leer el CSV: {e}")
         df = pl.DataFrame()
@@ -111,220 +76,222 @@ def validar_nombre_archivo(nom_arch: str):
     obs = []
     if re.search(r"[ñáéíóúüÑÁÉÍÓÚÜ]", nom_arch):
         obs.append("El nombre del archivo contiene caracteres especiales (ñ, tildes, diéresis).")
-    for p in ART_PREP:
-        if f"_{p}_" in nom_arch:
-            obs.append(f"El nombre del archivo incluye la preposición/artículo: {p}")
-    if re.search(r"[A-Z]", nom_arch) and not re.fullmatch(r"[A-Z0-9_]+", nom_arch):
-        obs.append("El nombre del archivo debe estar en minúsculas, salvo siglas.")
     if " " in nom_arch:
         obs.append("El nombre del archivo no debe tener espacios. Se recomienda usar guiones bajos para separar palabras.")
-    if not obs:
-        return ["No se encontraron observaciones con el nombre del archivo."]
-    return obs
+    return obs or ["No se encontraron observaciones con el nombre del archivo."]
 
 def validar_nombres_columnas(df: pl.DataFrame):
+    if df.is_empty():
+        return ["No se encontraron observaciones de los nombres de las columnas."]
     obs = []
     cols = df.columns
     especiales = [c for c in cols if re.search(r"[ñáéíóúüÑÁÉÍÓÚÜ]", c or "")]
     if especiales:
-        obs.append("Nombre de columnas con caracteres especiales (ñ, tildes, diéresis): " + ", ".join(especiales))
-    espacios = [c for c in cols if (" " in (c or "")) or ("\n" in (c or ""))]
-    if espacios:
-        obs.append("Nombre de columnas con espacios o saltos de linea: " + ", ".join(espacios) + ". Se recomienda utilizar guión bajo")
+        obs.append("Nombre de columnas con caracteres especiales: " + " | ".join(especiales))
     largas = [c for c in cols if split_words_underscore(c or "") > 5]
     if largas:
-        obs.append("Nombre de columnas con más de 5 palabras: " + ", ".join(largas))
-    if any((c or "").lower() == "id" for c in cols):
-        obs.append("No se permite llamar a una columna 'id'. Usar un nombre más descriptivo.")
-    sufijo_mal = [c for c in cols if re.search(r"_[0-9]$", c or "") and ("extra" not in (c or ""))]
-    if sufijo_mal:
-        obs.append("Nombres de columnas terminan en sufijo de un solo dígito (debe ser con 2 dígitos, ej. _01): " + ", ".join(sufijo_mal))
-    preps_cols = set()
-    for c in cols:
-        if c is None:
-            continue
-        if any(re.search(rf"(_{p}_)|(\s{p}\s)", c) for p in ART_PREP):
-            preps_cols.add(c)
-    if preps_cols:
-        if len(preps_cols) == 1:
-            obs.append(f"El nombre de la columna: {list(preps_cols)[0]} tiene artículos o preposiciones")
-        else:
-            obs.append("El nombre de las columnas: " + ", ".join(sorted(preps_cols)) + " tienen artículos o preposiciones")
-    if not obs:
-        return ["No se encontraron observaciones de los nombres de las columnas"]
-    return obs
+        obs.append("Nombre de columnas con más de 5 palabras: " + " | ".join(largas))
+    return obs or ["No se encontraron observaciones de los nombres de las columnas."]
 
 def validar_datos(df: pl.DataFrame):
     obs = []
     if df.is_empty():
         return ["No se encontraron observaciones sobre los datos."]
     cols_texto = [c for c, s in zip(df.columns, df.dtypes) if s == pl.Utf8]
-    cols_con_espacios = []
     for c in cols_texto:
         serie = df[c].cast(pl.Utf8, strict=False)
-        if serie.drop_nans().drop_nulls().map_elements(lambda x: bool(re.match(r'^\\s|.*\\s$', x)) if isinstance(x, str) else False, return_dtype=pl.Boolean).any():
-            cols_con_espacios.append(c)
-    if cols_con_espacios:
-        if len(cols_con_espacios) == 1:
-            obs.append(f"La columna {cols_con_espacios[0]} tiene valores con espacios al inicio o final")
-        else:
-            obs.append("Las columnas " + ", ".join(cols_con_espacios) + " tienen valores con espacios al inicio o final")
-    cols_fecha = [c for c in df.columns if "fecha" in (c or "").lower()]
-    cols_fecha_invalidas = []
-    for c in cols_fecha:
-        serie = df[c].cast(pl.Utf8, strict=False)
-        vals = [v for v in serie.to_list() if isinstance(v, str) and v.strip() != ""]
-        if not vals:
-            continue
-        if any(not detect_iso8601_strict(v.strip()) for v in vals):
-            cols_fecha_invalidas.append(c)
-    if cols_fecha_invalidas:
-        if len(cols_fecha_invalidas) == 1:
-            obs.append(f"La columna {cols_fecha_invalidas[0]} tiene valores con formato de fecha inválido. Debe ser ISO 8601 estricto: YYYY-MM-DDTHH:MM:SS")
-        else:
-            obs.append("Las columnas: " + ", ".join(cols_fecha_invalidas) + " tienen valores con formato de fecha inválido. Debe ser ISO 8601 estricto: YYYY-MM-DDTHH:MM:SS")
-    cols_numericas = [c for c, s in zip(df.columns, df.dtypes) if s in (pl.Int8, pl.Int16, pl.Int32, pl.Int64, pl.Float32, pl.Float64)]
-    cols_num_malas = []
-    for c in cols_numericas:
-        serie_txt = df[c].cast(pl.Utf8, strict=False)
-        if serie_txt.drop_nulls().drop_nans().map_elements(lambda x: bool(re.search(r"[,\\$\\s]", x)) if isinstance(x, str) else False, return_dtype=pl.Boolean).any():
-            cols_num_malas.append(c)
-    if cols_num_malas:
-        if len(cols_num_malas) == 1:
-            obs.append(f"La columna numérica {cols_num_malas[0]} contiene símbolos o separadores no permitidos.")
-        else:
-            obs.append("Las columnas numéricas " + ", ".join(cols_num_malas) + " contienen símbolos o separadores no permitidos.")
-    cols_caracter = [c for c, s in zip(df.columns, df.dtypes) if s == pl.Utf8]
-    inconsistencias = []
-    for c in cols_caracter:
-        vals = [v for v in df[c].drop_nulls().unique().to_list() if isinstance(v, str)]
-        if not vals:
-            continue
-        lower_set = set(v.lower() for v in vals)
-        if len(lower_set) < len(vals):
-            dups = []
-            seen = set()
-            for v in vals:
-                lv = v.lower()
-                if lv in seen:
-                    dups.append(v)
-                else:
-                    seen.add(lv)
-            if dups:
-                inconsistencias.append(f"{c}. En las categorias: " + ", ".join(sorted(set(dups))))
-    if inconsistencias:
-        if len(inconsistencias) == 1:
-            obs.append("La columna: " + inconsistencias[0] + ", tiene variantes de mayúsculas/minúsculas o acentos.")
-        else:
-            obs.append("Las columnas: " + ", ".join(inconsistencias) + ", tienen variantes de mayúsculas/minúsculas o acentos.")
-    if not obs:
-        return ["No se encontraron observaciones sobre los datos."]
-    return obs
+        if serie.drop_nans().drop_nulls().map_elements(
+            lambda x: bool(re.match(r'^\s|.*\s$', x)) if isinstance(x, str) else False,
+            return_dtype=pl.Boolean
+        ).any():
+            obs.append(f"La columna {c} tiene valores con espacios al inicio o final.")
+    return obs or ["No se encontraron observaciones sobre los datos."]
 
-# ---------------- PDF (no editable, acuse) ----------------
-def construir_pdf(final_dict: dict, nombre_archivo: str, token: str, no_oficio: str) -> bytes:
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
+# ---------------- PDF CORREGIDO ----------------
+def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
+    pdf_buffer = io.BytesIO()
     width, height = letter
+    c = canvas.Canvas(pdf_buffer, pagesize=letter)
 
-    top_margin = 3.5*cm
-    bottom_margin = 3.0*cm
-    left_margin = 2.2*cm
-    right_margin = 2.2*cm
+    left_margin = 2.2 * cm
+    right_margin = 2.2 * cm
+    top_margin = 4.5 * cm
+    bottom_margin = 3.5 * cm
+    line_height = 0.5 * cm
+    available_width = width - left_margin - right_margin
 
-    # Encabezado
-    sup_img = os.path.join(LOGOS_FOLDER, "superior.png")
-    header_h = 3.0*cm
-    if os.path.exists(sup_img):
-        img_w = width - 3*cm
-        c.drawImage(sup_img, (width - img_w)/2, height - header_h - 1.0*cm, width=img_w, height=header_h, preserveAspectRatio=True, mask='auto')
+    header_left = os.path.join(LOGOS_FOLDER, "superiorizquierdo.png")
+    header_right = os.path.join(LOGOS_FOLDER, "superiorderecho.png")
+    footer_img = os.path.join(LOGOS_FOLDER, "inferior.png")
 
-    c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(colors.HexColor("#333333"))
-    c.drawRightString(width - right_margin, height - header_h - 1.2*cm, f"No. de Oficio: {no_oficio}")
+    def draw_header_footer():
+        # Logos superiores
+        if os.path.exists(header_left):
+            c.drawImage(header_left, left_margin, height - 3.0 * cm,
+                        width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
+        if os.path.exists(header_right):
+            # Logo derecho MÁS PEGADO A LA DERECHA
+            c.drawImage(header_right, width - 7.5 * cm, height - 3.0 * cm,  # Reducido de 9.0cm a 7.5cm
+                        width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
+        # Pie de página
+        if os.path.exists(footer_img):
+            c.drawImage(footer_img, 0, 0.5 * cm,
+                        width=width, height=2.5 * cm, preserveAspectRatio=True, mask="auto")
 
-    c.setFont("Helvetica", 11)
-    text = [
+    def nueva_pagina():
+        c.showPage()
+        draw_header_footer()
+        c.setFont("Helvetica", 10.5)
+        return height - top_margin
+
+    # Dibujar cabecera en la primera página
+    draw_header_footer()
+    c.setFont("Helvetica", 10.5)
+    
+    # Empezar más abajo para dejar espacio a los logos más grandes
+    y = height - top_margin
+
+    # Encabezado de texto institucional - ALINEADO A LA DERECHA
+    encabezado = [
         "Unidad de Innovación de la Gestión Pública",
         "Dirección General de Datos y Transparencia Proactiva",
-        f"Ciudad de México a {datetime.now().strftime('%d de %B de %Y')}"
+        f"Ciudad de México, a {datetime.now().strftime('%d de %B de %Y')}"
     ]
-    y = height - header_h - 2.2*cm
-    for line in text:
-        c.drawCentredString(width/2, y, line); y -= 0.45*cm
+    
+    for line in encabezado:
+        # Calcular ancho del texto para alineación derecha
+        text_width = c.stringWidth(line, "Helvetica", 10.5)
+        x_position = width - right_margin - text_width  # Alineado a la derecha
+        c.drawString(x_position, y, line)
+        y -= 0.6 * cm
 
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width/2, y-0.2*cm, "ATENTA NOTA")
-    y -= 1.2*cm
+    # Título (centrado)
+    y -= 0.4 * cm
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(width / 2, y, "ATENTA NOTA")
+    y -= 0.8 * cm
 
-    c.setFont("Helvetica-Oblique", 10.5)
-    c.drawCentredString(width/2, y, "El siguiente documento se genera automáticamente con el sistema API-Validador-Formatos-Datos-Abiertos.")
-    y -= 0.9*cm
+    c.setFont("Helvetica-Oblique", 10)
+    descripcion = "El siguiente documento se genera automáticamente con el sistema API-Validador-Formatos-Datos-Abiertos."
+    c.drawCentredString(width / 2, y, descripcion)
+    y -= 0.8 * cm
 
+    # Información del archivo (alineado a la izquierda)
     c.setFont("Helvetica", 10.5)
     c.drawString(left_margin, y, f"Nombre del Archivo: {nombre_archivo}")
-    y -= 0.5*cm
-    c.drawString(left_margin, y, f"Fecha Validación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    y -= 0.8*cm
+    y -= 0.5 * cm
+    c.drawString(left_margin, y, f"Fecha de Validación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= 0.8 * cm
 
-    def draw_obs_block(title, obs_list, y):
-        c.setFont("Helvetica-Bold", 13)
-        c.drawString(left_margin, y, title); y -= 0.5*cm
-        if not obs_list:
-            c.setFont("Helvetica", 10.5); c.drawString(left_margin, y, "Sin observaciones."); y -= 0.4*cm
+    def draw_wrapped_text(text, x, y, max_width, font_name="Helvetica", font_size=10.5):
+        """Función MEJORADA para manejo de textos largos con saltos de línea REALES"""
+        if not text:
             return y
-        num = 1
-        for o in obs_list:
-            c.setFont("Helvetica-Bold", 10.5); c.drawString(left_margin, y, f"Observación {num}"); y -= 0.4*cm
+            
+        words = text.split(' ')
+        lines = []
+        current_line = []
+        
+        for word in words:
+            test_line = ' '.join(current_line + [word]) if current_line else word
+            # Usar stringWidth para medir exactamente el ancho del texto
+            test_width = c.stringWidth(test_line, font_name, font_size)
+            
+            if test_width <= max_width:
+                current_line.append(word)
+            else:
+                # Si la línea actual tiene contenido, guardarla
+                if current_line:
+                    lines.append(' '.join(current_line))
+                # Si una palabra individual es más larga que el ancho máximo, dividirla
+                if c.stringWidth(word, font_name, font_size) > max_width:
+                    # Dividir palabra larga
+                    chars = list(word)
+                    temp_word = ""
+                    for char in chars:
+                        temp_test = temp_word + char
+                        if c.stringWidth(temp_test, font_name, font_size) <= max_width:
+                            temp_word += char
+                        else:
+                            if temp_word:
+                                lines.append(temp_word)
+                            temp_word = char
+                    if temp_word:
+                        current_line = [temp_word]
+                else:
+                    current_line = [word]
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        # Dibujar las líneas
+        for line in lines:
+            if y < bottom_margin + 1.5 * cm:
+                y = nueva_pagina()
+            c.drawString(x, y, line)
+            y -= line_height
+            
+        return y
+
+    def draw_block(title, obs_list, y):
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(left_margin, y, title)
+        y -= 0.7 * cm
+        
+        if not obs_list:
             c.setFont("Helvetica", 10.5)
-            import textwrap
-            wrapped = textwrap.wrap(o, width=110)
-            for line in wrapped:
-                c.drawString(left_margin, y, line); y -= 0.38*cm
-            y -= 0.2*cm
-            num += 1
+            c.drawString(left_margin, y, "Sin observaciones.")
+            return y - 0.7 * cm
+            
+        for i, obs in enumerate(obs_list, 1):
+            # Verificar si necesitamos nueva página ANTES de dibujar
+            if y < bottom_margin + 3 * cm:
+                y = nueva_pagina()
+                
+            c.setFont("Helvetica-Bold", 10.5)
+            obs_title = f"Observación {i}:"
+            c.drawString(left_margin, y, obs_title)
+            y -= 0.5 * cm
+            
+            c.setFont("Helvetica", 10.5)
+            # Usar la función mejorada para wrap de texto
+            y = draw_wrapped_text(obs, left_margin, y, available_width, "Helvetica", 10.5)
+            y -= 0.3 * cm
+            
         return y
 
     bloques = [
         ("Observaciones de Formato", final_dict.get("formato", [])),
         ("Observaciones del Nombre del Archivo", final_dict.get("archivo", [])),
         ("Observaciones de Nombres de Columnas", final_dict.get("columnas", [])),
-        ("Observaciones de Filas/Datos", final_dict.get("datos", [])),
+        ("Observaciones de Filas/Datos", final_dict.get("datos", []))
     ]
+    
+    for titulo, lista in bloques:
+        y = draw_block(titulo, lista, y)
+        y -= 0.3 * cm
 
-    for titulo, obs in bloques:
-        y = draw_obs_block(titulo, obs, y)
-        y -= 0.3*cm
-        if y < bottom_margin + 5*cm:
-            break
+    # Firma
+    if y < bottom_margin + 3 * cm:
+        y = nueva_pagina()
 
     c.setFont("Helvetica-Bold", 11)
-    c.drawCentredString(width/2, bottom_margin + 3.0*cm, "Atentamente")
-    c.drawCentredString(width/2, bottom_margin + 2.3*cm, "Mtro. Lamik Kasis Petraki")
-    c.drawCentredString(width/2, bottom_margin + 1.7*cm, "Director de Innovación y Análisis de Datos")
+    c.drawCentredString(width / 2, bottom_margin + 3.0 * cm, "Atentamente")
+    c.drawCentredString(width / 2, bottom_margin + 2.3 * cm, "Datos Abiertos")
+    c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Dirección de Innovación y Análisis de Datos")
 
-    line_y = bottom_margin + 1.2*cm
-    c.setStrokeColor(colors.HexColor("#7B1733"))
-    c.setLineWidth(2)
-    c.line(left_margin, line_y, width - right_margin, line_y)
-
-    inf_img = os.path.join(LOGOS_FOLDER, "inferior.png")
-    img_h = 2.0*cm
-    if os.path.exists(inf_img):
-        c.drawImage(inf_img, left_margin, 0.5*cm, width=6.5*cm, height=img_h, preserveAspectRatio=True, mask='auto')
-
-    c.setFont("Helvetica", 8)
-    c.setFillColor(colors.HexColor("#333333"))
-    right_text_x = (width - right_margin)
-    c.drawRightString(right_text_x, line_y + 0.3*cm, "Av. Insurgentes Sur, No. 3211, 1° piso, Col. Insurgentes Cuicuilco,")
-    c.drawRightString(right_text_x, line_y - 0.05*cm, "alcaldía Coyoacán, código postal 04530, Ciudad de México.")
-
-    c.showPage(); c.save()
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
+    c.save()
+    pdf_bytes = pdf_buffer.getvalue()
+    pdf_buffer.close()
+    
+    # Guardar también en archivo para verificación
+    pdf_path = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_bytes)
+        
     return pdf_bytes
 
-# ---------------- Rutas ----------------
+# ---------------- FLASK ----------------
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -341,71 +308,37 @@ def validar():
 
     filename = secure_filename(file.filename)
     ext = filename.rsplit(".", 1)[1].lower()
-    file.stream.seek(0)
     contenido = io.BytesIO(file.read()); contenido.seek(0)
 
     formato_obs, df = validar_formato_y_carga(io.BytesIO(contenido.getvalue()), filename, ext)
-    nombre_sin_ext = os.path.splitext(filename)[0]
-    archivo_obs = validar_nombre_archivo(nombre_sin_ext)
-    columnas_obs = validar_nombres_columnas(df) if df.shape[1] > 0 else ["No se encontraron observaciones de los nombres de las columnas"]
+    archivo_obs = validar_nombre_archivo(os.path.splitext(filename)[0])
+    columnas_obs = validar_nombres_columnas(df)
     datos_obs = validar_datos(df)
 
-    FINAL = {
-        "formato": formato_obs or ["No se encontraron observaciones de formato."],
-        "archivo": archivo_obs,
-        "columnas": columnas_obs,
-        "datos": datos_obs
-    }
-
-    def es_ok(lista, texto_ok): return len(lista) == 1 and texto_ok in lista[0]
-    pasa = (
-        es_ok(FINAL["formato"], "No se encontraron observaciones de formato") and
-        es_ok(FINAL["archivo"], "No se encontraron observaciones con el nombre del archivo") and
-        es_ok(FINAL["columnas"], "No se encontraron observaciones de los nombres de las columnas") and
-        es_ok(FINAL["datos"], "No se encontraron observaciones sobre los datos")
-    )
-
+    FINAL = {"formato": formato_obs, "archivo": archivo_obs, "columnas": columnas_obs, "datos": datos_obs}
     token = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    with open(os.path.join(RESULTS_FOLDER, f"final_{token}.json"), "w", encoding="utf-8") as f:
+        json.dump(FINAL, f, ensure_ascii=False)
 
-    # Guardar FINAL
-    final_json_path = os.path.join(RESULTS_FOLDER, f"final_{token}.json")
-    with open(final_json_path, "w", encoding="utf-8") as fj:
-        json.dump(FINAL, fj, ensure_ascii=False)
-
-    # Guardar número de oficio persistente para este token
-    no_oficio = generar_no_oficio()
-    with open(os.path.join(RESULTS_FOLDER, f"no_oficio_{token}.txt"), "w", encoding="utf-8") as fno:
-        fno.write(no_oficio)
-
-    return render_template("resultados.html",
-                           token=token,
-                           pasa=pasa,
-                           FINAL=FINAL,
-                           nombre_archivo=filename)
+    return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename)
 
 @app.route("/descargar/pdf/<token>")
 def descargar_pdf(token):
-    final_json_path = os.path.join(RESULTS_FOLDER, f"final_{token}.json")
-    if not os.path.exists(final_json_path):
+    path_json = os.path.join(RESULTS_FOLDER, f"final_{token}.json")
+    if not os.path.exists(path_json):
         return "No existe el recurso", 404
-    with open(final_json_path, "r", encoding="utf-8") as fj:
-        FINAL = json.load(fj)
-
-    no_oficio_path = os.path.join(RESULTS_FOLDER, f"no_oficio_{token}.txt")
-    try:
-        with open(no_oficio_path, "r", encoding="utf-8") as fno:
-            no_oficio = fno.read().strip()
-    except Exception:
-        no_oficio = generar_no_oficio()
+    with open(path_json, "r", encoding="utf-8") as f:
+        FINAL = json.load(f)
 
     nombre_archivo = request.args.get("nombre", "archivo_validado")
-    pdf_bytes = construir_pdf(FINAL, nombre_archivo, token, no_oficio)
-
-    pdf_path = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
-    with open(pdf_path, "wb") as f:
-        f.write(pdf_bytes)
-
-    return send_file(io.BytesIO(pdf_bytes), as_attachment=True, download_name=f"informe_{token}.pdf", mimetype="application/pdf")
+    pdf_bytes = construir_pdf(FINAL, nombre_archivo, token)
+    
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        as_attachment=True,
+        download_name=f"informe_{token}.pdf",
+        mimetype="application/pdf"
+    )
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)

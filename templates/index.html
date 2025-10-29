@@ -1,28 +1,49 @@
 {% extends "base.html" %}
+{% block title %}Inicio — Validador de Datos Abiertos{% endblock %}
+
 {% block content %}
 <div class="row">
-  <div class="col-sm-8">
-    <h2>Cargar archivo para validar</h2>
-    <p>Formatos permitidos: CSV o XLSX. El archivo no debe tener múltiples hojas y debe cumplir con UTF-8 (CSV).</p>
-    <form action="{{ url_for('validar') }}" method="post" enctype="multipart/form-data" class="well">
-      <div class="form-group">
-        <label for="archivo">Selecciona el archivo</label>
-        <input type="file" name="archivo" id="archivo" class="form-control">
-      </div>
-      <button type="submit" class="btn btn-primary">Validar</button>
-    </form>
-    {% if error %}
-      <div class="alert alert-danger">{{ error }}</div>
-    {% endif %}
-  </div>
-  <div class="col-sm-4">
-    <h3>¿Qué valida?</h3>
-    <ul>
-      <li><strong>Formato:</strong> UTF-8 (CSV), una sola hoja (XLSX), sin columnas vacías.</li>
-      <li><strong>Nombre del archivo:</strong> sin ñ/tildes, sin espacios, minúsculas salvo siglas.</li>
-      <li><strong>Columnas:</strong> sin ñ/tildes, sin espacios/saltos; máx. 5 palabras; sin “id” ni sufijo “_1”.</li>
-      <li><strong>Datos:</strong> sin espacios al inicio/fin; fechas ISO 8601; numéricos sin símbolos; categorías coherentes.</li>
-    </ul>
+  <div class="col-md-8 col-md-offset-2">
+    <section class="well text-center" style="background:#fff; padding:45px; border-radius:8px;">
+      <h1 style="color:#7B1733; font-weight:700; margin-bottom:15px;">
+        Validador de Datos Abiertos
+      </h1>
+
+      <!-- Leyenda explicativa -->
+      <p class="lead" style="font-size:16px; margin-bottom:25px;">
+        Este sistema permite verificar la correcta estructura, formato y calidad de los archivos
+        que contienen información en formato <strong>CSV</strong> o <strong>XLSX</strong>, conforme a los lineamientos
+        de Datos Abiertos. <br><br>
+        Valida automáticamente:
+      </p>
+
+      <ul style="text-align:left; display:inline-block; font-size:15px; line-height:1.7;">
+        <li>✅ La estructura del archivo (formato CSV o XLSX válido).</li>
+        <li>✅ La nomenclatura del nombre del archivo.</li>
+        <li>✅ Los nombres de las columnas (sin tildes, ni caracteres especiales).</li>
+        <li>✅ La calidad de los datos (campos vacíos o con espacios indebidos).</li>
+      </ul>
+
+      <p style="margin-top:25px; font-size:15px;">
+        Al finalizar la revisión, se generará un <strong>reporte en PDF institucional</strong> con las observaciones detectadas.
+      </p>
+
+      <hr style="margin:25px 0;">
+
+      <!-- Formulario de carga -->
+      <form action="{{ url_for('validar') }}" method="post" enctype="multipart/form-data" class="mt-20">
+        <div class="form-group">
+          <input type="file" name="archivo" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg" style="background-color:#7B1733; border:none;">
+          Validar archivo
+        </button>
+      </form>
+
+      {% if error %}
+      <div class="alert alert-danger" style="margin-top:25px;">{{ error }}</div>
+      {% endif %}
+    </section>
   </div>
 </div>
 {% endblock %}
