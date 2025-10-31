@@ -2,7 +2,7 @@
 """
 Sistema: API-Validador-Formatos-Datos-Abiertos
 Autor: Mtro. Francisco Daniel Martínez Martínez
-Versión: v8.7 (texto derecho y logo derecho ajustado)
+Versión: v8.8 (solución error Excel con Polars)
 """
 import io, os, re, json
 from datetime import datetime
@@ -40,29 +40,59 @@ def is_utf8(file_bytes: bytes) -> bool:
 def split_words_underscore(name: str) -> int:
     return len([p for p in name.split("_") if p])
 
-# ---------------- VALIDADORES ----------------
+# ---------------- VALIDADORES CORREGIDOS ----------------
 def validar_formato_y_carga(file_storage, filename, ext):
     obs = []
     if ext in ("xls", "xlsx"):
-        import openpyxl
-        wb = openpyxl.load_workbook(file_storage, read_only=True, data_only=True)
-        ws = wb[wb.sheetnames[0]]
-        rows = list(ws.values)
-        headers = [str(h) if h else "" for h in rows[0]] if rows else []
-        data = rows[1:] if len(rows) > 1 else []
-        df = pl.DataFrame(data, schema=headers) if headers else pl.DataFrame()
-        empty_headers = [h for h in df.columns if (h is None or str(h).strip() in ("", " "))]
-        if empty_headers:
-            obs.append(f"Se encuentran {len(empty_headers)} variables sin nombre. Revisar el contenido de estas variables.")
-        return obs, df
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(file_storage, read_only=True, data_only=True)
+            ws = wb[wb.sheetnames[0]]
+            rows = list(ws.values)
+            
+            if not rows:
+                obs.append("El archivo Excel está vacío.")
+                return obs, pl.DataFrame()
+                
+            headers = [str(h) if h is not None else "" for h in rows[0]]
+            data = rows[1:] if len(rows) > 1 else []
+            
+            # CONVERSIÓN SEGURA A STRING - SOLUCIÓN AL ERROR
+            safe_data = []
+            for row in data:
+                safe_row = []
+                for cell in row:
+                    if cell is None:
+                        safe_row.append("")
+                    elif isinstance(cell, datetime):
+                        safe_row.append(cell.strftime('%Y-%m-%d %H:%M:%S'))
+                    else:
+                        safe_row.append(str(cell))
+                safe_data.append(safe_row)
+            
+            # Crear DataFrame con orientación explícita y manejo de tipos
+            if headers:
+                df = pl.DataFrame(safe_data, schema=headers, orient="row")
+            else:
+                df = pl.DataFrame()
+                
+            empty_headers = [h for h in df.columns if (h is None or str(h).strip() in ("", " "))]
+            if empty_headers:
+                obs.append(f"Se encuentran {len(empty_headers)} variables sin nombre. Revisar el contenido de estas variables.")
+            
+            return obs, df
+            
+        except Exception as e:
+            obs.append(f"Error al procesar archivo Excel: {str(e)}")
+            return obs, pl.DataFrame()
 
-    # CSV
+    # CSV - MANTENER LA LÓGICA ORIGINAL
     file_bytes = file_storage.read()
     if not is_utf8(file_bytes):
         obs.append("La codificación no es la correcta, debe ser 'UTF-8'.")
     stream = io.BytesIO(file_bytes)
     try:
-        df = pl.read_csv(stream, infer_schema_length=2000, ignore_errors=True)
+        df = pl.read_csv(stream, infer_schema_length=10000, ignore_errors=True)  # Aumentado infer_schema_length
     except Exception as e:
         obs.append(f"No fue posible leer el CSV: {e}")
         df = pl.DataFrame()
@@ -97,17 +127,28 @@ def validar_datos(df: pl.DataFrame):
     obs = []
     if df.is_empty():
         return ["No se encontraron observaciones sobre los datos."]
-    cols_texto = [c for c, s in zip(df.columns, df.dtypes) if s == pl.Utf8]
+    
+    # Convertir todas las columnas a string para validación segura
+    cols_texto = df.columns
     for c in cols_texto:
-        serie = df[c].cast(pl.Utf8, strict=False)
-        if serie.drop_nans().drop_nulls().map_elements(
-            lambda x: bool(re.match(r'^\s|.*\s$', x)) if isinstance(x, str) else False,
-            return_dtype=pl.Boolean
-        ).any():
-            obs.append(f"La columna {c} tiene valores con espacios al inicio o final.")
+        try:
+            # Convertir columna a string para validación
+            serie_str = df[c].cast(pl.Utf8, strict=False)
+            # Verificar espacios al inicio/final
+            has_spaces = serie_str.drop_nulls().map_elements(
+                lambda x: bool(re.match(r'^\s|\s$', str(x))) if x is not None else False,
+                return_dtype=pl.Boolean
+            ).any()
+            
+            if has_spaces:
+                obs.append(f"La columna {c} tiene valores con espacios al inicio o final.")
+        except Exception:
+            # Si hay error en la conversión, continuar con la siguiente columna
+            continue
+            
     return obs or ["No se encontraron observaciones sobre los datos."]
 
-# ---------------- PDF CORREGIDO ----------------
+# ---------------- PDF (MANTENER SIN CAMBIOS) ----------------
 def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     pdf_buffer = io.BytesIO()
     width, height = letter
@@ -131,7 +172,7 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
                         width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
         if os.path.exists(header_right):
             # Logo derecho MÁS PEGADO A LA DERECHA
-            c.drawImage(header_right, width - 7.5 * cm, height - 3.0 * cm,  # Reducido de 9.0cm a 7.5cm
+            c.drawImage(header_right, width - 7.5 * cm, height - 3.0 * cm,
                         width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
         # Pie de página
         if os.path.exists(footer_img):
@@ -278,7 +319,7 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     c.setFont("Helvetica-Bold", 11)
     c.drawCentredString(width / 2, bottom_margin + 3.0 * cm, "Atentamente")
     c.drawCentredString(width / 2, bottom_margin + 2.3 * cm, "Datos Abiertos")
-    c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Dirección de Innovación y Análisis de Datos")
+    c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Director de Innovación y Análisis de Datos")
 
     c.save()
     pdf_bytes = pdf_buffer.getvalue()
@@ -308,19 +349,24 @@ def validar():
 
     filename = secure_filename(file.filename)
     ext = filename.rsplit(".", 1)[1].lower()
-    contenido = io.BytesIO(file.read()); contenido.seek(0)
+    contenido = io.BytesIO(file.read())
+    contenido.seek(0)
 
-    formato_obs, df = validar_formato_y_carga(io.BytesIO(contenido.getvalue()), filename, ext)
-    archivo_obs = validar_nombre_archivo(os.path.splitext(filename)[0])
-    columnas_obs = validar_nombres_columnas(df)
-    datos_obs = validar_datos(df)
+    try:
+        formato_obs, df = validar_formato_y_carga(contenido, filename, ext)
+        archivo_obs = validar_nombre_archivo(os.path.splitext(filename)[0])
+        columnas_obs = validar_nombres_columnas(df)
+        datos_obs = validar_datos(df)
 
-    FINAL = {"formato": formato_obs, "archivo": archivo_obs, "columnas": columnas_obs, "datos": datos_obs}
-    token = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    with open(os.path.join(RESULTS_FOLDER, f"final_{token}.json"), "w", encoding="utf-8") as f:
-        json.dump(FINAL, f, ensure_ascii=False)
+        FINAL = {"formato": formato_obs, "archivo": archivo_obs, "columnas": columnas_obs, "datos": datos_obs}
+        token = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        with open(os.path.join(RESULTS_FOLDER, f"final_{token}.json"), "w", encoding="utf-8") as f:
+            json.dump(FINAL, f, ensure_ascii=False)
 
-    return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename)
+        return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename)
+    
+    except Exception as e:
+        return render_template("index.html", error=f"Error al procesar el archivo: {str(e)}")
 
 @app.route("/descargar/pdf/<token>")
 def descargar_pdf(token):
