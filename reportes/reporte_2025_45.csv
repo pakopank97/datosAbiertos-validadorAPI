@@ -1,0 +1,10 @@
+Fecha,Hora,IP,Archivo,Peso_KB,Tiempo_Procesamiento_s,Estado,Cantidad_Observaciones
+2025-11-03,10:17:13,127.0.0.1,Convenios.csv,177.43,0.042254,NO VÁLIDO,1
+2025-11-03,10:17:34,127.0.0.1,diccionario_convenios.csv,39.2,0.01337,NO VÁLIDO,1
+2025-11-03,10:17:52,127.0.0.1,Convenios.xlsx,67.44,0.615775,VÁLIDO,0
+2025-11-03,10:18:55,127.0.0.1,base_rsps_29_de_agosto_de_2025_3.csv,120.42,0.036413,ERROR,0
+2025-11-03,10:19:13,127.0.0.1,Convenios.csv,177.43,0.023085,ERROR,0
+2025-11-03,10:19:54,127.0.0.1,Convenios.csv,177.43,0.02547,NO VÁLIDO,1
+2025-11-03,10:20:02,127.0.0.1,Convenios.csv,177.43,0.025501,NO VÁLIDO,1
+2025-11-03,10:20:27,127.0.0.1,Convenios.xlsx,67.44,0.055777,VÁLIDO,0
+2025-11-03,10:21:01,127.0.0.1,base_rsps_29_de_agosto_de_2025_3.csv,120.42,0.01836,NO VÁLIDO,2

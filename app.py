@@ -4,9 +4,9 @@ Sistema: API-Validador-Formatos-Datos-Abiertos
 Autor: Mtro. Francisco Daniel Martínez Martínez
 Versión: v8.9.1 (PDF para archivos válidos sin errores - CORREGIDO)
 """
-import io, os, re, json
-from datetime import datetime
-from flask import Flask, request, render_template, send_file
+import io, os, re, json, csv
+from datetime import datetime, timedelta
+from flask import Flask, request, render_template, send_file, after_this_request
 from werkzeug.utils import secure_filename
 import polars as pl
 from reportlab.lib.pagesizes import letter
@@ -18,13 +18,90 @@ from reportlab.lib import colors
 UPLOAD_FOLDER = "uploads"
 RESULTS_FOLDER = "resultados"
 LOGOS_FOLDER = "logos"
+LOGS_FOLDER = "logs"
+REPORTS_FOLDER = "reportes"
 ALLOWED_EXTENSIONS = {"csv", "xls", "xlsx"}
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RESULTS_FOLDER, exist_ok=True)
+# Crear directorios necesarios
+for folder in [UPLOAD_FOLDER, RESULTS_FOLDER, LOGOS_FOLDER, LOGS_FOLDER, REPORTS_FOLDER]:
+    os.makedirs(folder, exist_ok=True)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256MB
+
+# ---------------- MANEJO DE LOGS Y REPORTES ----------------
+def get_current_log_file():
+    """Obtiene el archivo de log semanal actual"""
+    current_date = datetime.now()
+    log_filename = f"validaciones_{current_date.year}_{current_date.month:02d}.log"
+    return os.path.join(LOGS_FOLDER, log_filename)
+
+def get_current_report_file():
+    """Obtiene el archivo de reporte semanal actual"""
+    current_date = datetime.now()
+    week_number = current_date.isocalendar()[1]
+    report_filename = f"reporte_{current_date.year}_{week_number:02d}.csv"
+    return os.path.join(REPORTS_FOLDER, report_filename)
+
+def write_to_log(ip_address, filename, file_size_kb, processing_time, status):
+    """Escribe una entrada en el log semanal"""
+    log_file = get_current_log_file()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    log_entry = f"{timestamp} | IP={ip_address} | Archivo={filename} | Peso={file_size_kb} KB | Tiempo de Procesamiento = {processing_time}s | Estado={status}\n"
+    
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+
+def update_weekly_report(ip_address, filename, file_size_kb, processing_time, status, observations_count):
+    """Actualiza el reporte semanal en CSV"""
+    report_file = get_current_report_file()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Verificar si el archivo existe para escribir los headers
+    file_exists = os.path.isfile(report_file)
+    
+    with open(report_file, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        
+        # Escribir headers si el archivo no existe
+        if not file_exists:
+            writer.writerow([
+                "Fecha", "Hora", "IP", "Archivo", "Peso_KB", 
+                "Tiempo_Procesamiento_s", "Estado", "Cantidad_Observaciones"
+            ])
+        
+        date_part = timestamp.split(" ")[0]
+        time_part = timestamp.split(" ")[1]
+        
+        writer.writerow([
+            date_part, time_part, ip_address, filename, file_size_kb,
+            processing_time, status, observations_count
+        ])
+
+def count_total_observations(final_dict):
+    """Cuenta el total de observaciones en todas las categorías"""
+    total = 0
+    for category, observations in final_dict.items():
+        # No contar los mensajes "No se encontraron observaciones"
+        valid_observations = [obs for obs in observations if not obs.startswith("No se encontraron")]
+        total += len(valid_observations)
+    return total
+
+def cleanup_temp_files(token):
+    """Elimina los archivos temporales (JSON y PDF) después de la descarga"""
+    try:
+        json_file = os.path.join(RESULTS_FOLDER, f"final_{token}.json")
+        pdf_file = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
+        
+        if os.path.exists(json_file):
+            os.remove(json_file)
+        if os.path.exists(pdf_file):
+            os.remove(pdf_file)
+            
+        print(f"Archivos temporales eliminados para token: {token}")
+    except Exception as e:
+        print(f"Error al eliminar archivos temporales: {e}")
 
 # ---------------- UTILIDADES ----------------
 def allowed_file(filename: str) -> bool:
@@ -359,6 +436,7 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     pdf_bytes = pdf_buffer.getvalue()
     pdf_buffer.close()
     
+    # Guardar PDF temporalmente (se eliminará después de la descarga)
     pdf_path = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
     with open(pdf_path, "wb") as f:
         f.write(pdf_bytes)
@@ -370,12 +448,13 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
 def index():
     return render_template("index.html")
 
-# En la función validar() del archivo app.py, modifica esta parte:
-
 @app.route("/validar", methods=["POST"])
 def validar():
+    start_time = datetime.now()
+    
     if "archivo" not in request.files:
         return render_template("index.html", error="No se adjuntó archivo.")
+    
     file = request.files["archivo"]
     if file.filename == "":
         return render_template("index.html", error="No se seleccionó archivo.")
@@ -384,7 +463,14 @@ def validar():
 
     filename = secure_filename(file.filename)
     ext = filename.rsplit(".", 1)[1].lower()
-    contenido = io.BytesIO(file.read())
+    
+    # Obtener IP del cliente
+    ip_address = request.remote_addr
+    
+    # Leer archivo para calcular tamaño
+    file_content = file.read()
+    file_size_kb = round(len(file_content) / 1024, 2)
+    contenido = io.BytesIO(file_content)
     contenido.seek(0)
 
     try:
@@ -395,6 +481,8 @@ def validar():
 
         FINAL = {"formato": formato_obs, "archivo": archivo_obs, "columnas": columnas_obs, "datos": datos_obs}
         token = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        
+        # Guardar JSON temporal (se eliminará después de la descarga)
         with open(os.path.join(RESULTS_FOLDER, f"final_{token}.json"), "w", encoding="utf-8") as f:
             json.dump(FINAL, f, ensure_ascii=False)
 
@@ -419,10 +507,22 @@ def validar():
             return True
 
         pasa = pasa_validacion()
+        processing_time = (datetime.now() - start_time).total_seconds()
+        status = "VÁLIDO" if pasa else "NO VÁLIDO"
+        observations_count = count_total_observations(FINAL)
+
+        # REGISTRAR EN LOGS Y REPORTES (esto permanece)
+        write_to_log(ip_address, filename, file_size_kb, processing_time, status)
+        update_weekly_report(ip_address, filename, file_size_kb, processing_time, status, observations_count)
 
         return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename, pasa=pasa)
     
     except Exception as e:
+        # Registrar error en logs
+        processing_time = (datetime.now() - start_time).total_seconds()
+        write_to_log(request.remote_addr, filename, file_size_kb, processing_time, "ERROR")
+        update_weekly_report(request.remote_addr, filename, file_size_kb, processing_time, "ERROR", 0)
+        
         return render_template("index.html", error=f"Error al procesar el archivo: {str(e)}")
 
 @app.route("/descargar/pdf/<token>")
@@ -436,6 +536,15 @@ def descargar_pdf(token):
     nombre_archivo = request.args.get("nombre", "archivo_validado")
     pdf_bytes = construir_pdf(FINAL, nombre_archivo, token)
     
+    # Configurar limpieza después de la respuesta
+    @after_this_request
+    def remove_files(response):
+        try:
+            cleanup_temp_files(token)
+        except Exception as e:
+            print(f"Error en limpieza automática: {e}")
+        return response
+    
     return send_file(
         io.BytesIO(pdf_bytes),
         as_attachment=True,
@@ -443,5 +552,22 @@ def descargar_pdf(token):
         mimetype="application/pdf"
     )
 
+# Limpieza programada de archivos temporales viejos (por si hay descargas fallidas)
+def cleanup_old_temp_files(hours_old=24):
+    """Elimina archivos temporales más viejos que el tiempo especificado"""
+    try:
+        current_time = datetime.now()
+        for filename in os.listdir(RESULTS_FOLDER):
+            if filename.startswith(("final_", "informe_")):
+                file_path = os.path.join(RESULTS_FOLDER, filename)
+                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                if (current_time - file_time).total_seconds() > (hours_old * 3600):
+                    os.remove(file_path)
+                    print(f"Archivo temporal antiguo eliminado: {filename}")
+    except Exception as e:
+        print(f"Error en limpieza de archivos antiguos: {e}")
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Ejecutar limpieza al iniciar la aplicación
+    cleanup_old_temp_files()
+    app.run(host="127.0.0.1", port=8081, debug=True)
