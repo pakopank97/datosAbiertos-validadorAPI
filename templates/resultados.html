@@ -23,15 +23,20 @@
       <!-- Botón principal de descarga -->
       <a href="{{ url_for('descargar_pdf', token=token, nombre=nombre_archivo) }}"
          class="btn btn-primary btn-lg"
-         style="background-color:#7B1733; border:none; font-size:18px; padding:12px 35px;">
+         style="border:none; font-size:18px; padding:12px 35px;">
         <span class="icon icon-download" aria-hidden="true"></span>
         Descargar reporte en PDF
       </a>
 
-      <!-- Leyenda explicativa -->
+      <!-- Leyenda explicativa dinámica -->
       <p style="margin-top:30px; font-size:16px; color:#333;">
-        Soluciona las observaciones que se encontraron en tu archivo,<br>
-        para que lo puedas validar de nuevo más tarde.
+        {% if pasa %}
+          Tu archivo ha pasado todas las validaciones exitosamente.<br>
+          Puedes descargar el resumen de validación en PDF.
+        {% else %}
+          Soluciona las observaciones que se encontraron en tu archivo,<br>
+          para que lo puedas validar de nuevo más tarde.
+        {% endif %}
       </p>
 
       <!-- Botón pequeño "Atrás" -->

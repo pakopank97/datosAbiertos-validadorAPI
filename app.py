@@ -2,7 +2,7 @@
 """
 Sistema: API-Validador-Formatos-Datos-Abiertos
 Autor: Mtro. Francisco Daniel Martínez Martínez
-Versión: v8.8 (solución error Excel con Polars)
+Versión: v8.9.1 (PDF para archivos válidos sin errores - CORREGIDO)
 """
 import io, os, re, json
 from datetime import datetime
@@ -92,7 +92,7 @@ def validar_formato_y_carga(file_storage, filename, ext):
         obs.append("La codificación no es la correcta, debe ser 'UTF-8'.")
     stream = io.BytesIO(file_bytes)
     try:
-        df = pl.read_csv(stream, infer_schema_length=10000, ignore_errors=True)  # Aumentado infer_schema_length
+        df = pl.read_csv(stream, infer_schema_length=10000, ignore_errors=True)
     except Exception as e:
         obs.append(f"No fue posible leer el CSV: {e}")
         df = pl.DataFrame()
@@ -128,13 +128,10 @@ def validar_datos(df: pl.DataFrame):
     if df.is_empty():
         return ["No se encontraron observaciones sobre los datos."]
     
-    # Convertir todas las columnas a string para validación segura
     cols_texto = df.columns
     for c in cols_texto:
         try:
-            # Convertir columna a string para validación
             serie_str = df[c].cast(pl.Utf8, strict=False)
-            # Verificar espacios al inicio/final
             has_spaces = serie_str.drop_nulls().map_elements(
                 lambda x: bool(re.match(r'^\s|\s$', str(x))) if x is not None else False,
                 return_dtype=pl.Boolean
@@ -143,12 +140,11 @@ def validar_datos(df: pl.DataFrame):
             if has_spaces:
                 obs.append(f"La columna {c} tiene valores con espacios al inicio o final.")
         except Exception:
-            # Si hay error en la conversión, continuar con la siguiente columna
             continue
             
     return obs or ["No se encontraron observaciones sobre los datos."]
 
-# ---------------- PDF (MANTENER SIN CAMBIOS) ----------------
+# ---------------- PDF ACTUALIZADO PARA ARCHIVOS VÁLIDOS ----------------
 def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     pdf_buffer = io.BytesIO()
     width, height = letter
@@ -166,15 +162,12 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     footer_img = os.path.join(LOGOS_FOLDER, "inferior.png")
 
     def draw_header_footer():
-        # Logos superiores
         if os.path.exists(header_left):
             c.drawImage(header_left, left_margin, height - 3.0 * cm,
                         width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
         if os.path.exists(header_right):
-            # Logo derecho MÁS PEGADO A LA DERECHA
             c.drawImage(header_right, width - 7.5 * cm, height - 3.0 * cm,
                         width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
-        # Pie de página
         if os.path.exists(footer_img):
             c.drawImage(footer_img, 0, 0.5 * cm,
                         width=width, height=2.5 * cm, preserveAspectRatio=True, mask="auto")
@@ -185,14 +178,11 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
         c.setFont("Helvetica", 10.5)
         return height - top_margin
 
-    # Dibujar cabecera en la primera página
     draw_header_footer()
     c.setFont("Helvetica", 10.5)
     
-    # Empezar más abajo para dejar espacio a los logos más grandes
     y = height - top_margin
 
-    # Encabezado de texto institucional - ALINEADO A LA DERECHA
     encabezado = [
         "Unidad de Innovación de la Gestión Pública",
         "Dirección General de Datos y Transparencia Proactiva",
@@ -200,32 +190,28 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     ]
     
     for line in encabezado:
-        # Calcular ancho del texto para alineación derecha
         text_width = c.stringWidth(line, "Helvetica", 10.5)
-        x_position = width - right_margin - text_width  # Alineado a la derecha
+        x_position = width - right_margin - text_width
         c.drawString(x_position, y, line)
         y -= 0.6 * cm
 
-    # Título (centrado)
     y -= 0.4 * cm
     c.setFont("Helvetica-Bold", 14)
     c.drawCentredString(width / 2, y, "ATENTA NOTA")
     y -= 0.8 * cm
 
-    c.setFont("Helvetica-Oblique", 10)
+    c.setFont("Helvetica", 10)
     descripcion = "El siguiente documento se genera automáticamente con el sistema API-Validador-Formatos-Datos-Abiertos."
     c.drawCentredString(width / 2, y, descripcion)
     y -= 0.8 * cm
 
-    # Información del archivo (alineado a la izquierda)
     c.setFont("Helvetica", 10.5)
     c.drawString(left_margin, y, f"Nombre del Archivo: {nombre_archivo}")
     y -= 0.5 * cm
-    c.drawString(left_margin, y, f"Fecha de Validación: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    y -= 0.8 * cm
+    c.drawString(left_margin, y, f"Fecha de Validación: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+    y -= 2.5 * cm
 
     def draw_wrapped_text(text, x, y, max_width, font_name="Helvetica", font_size=10.5):
-        """Función MEJORADA para manejo de textos largos con saltos de línea REALES"""
         if not text:
             return y
             
@@ -235,18 +221,14 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
         
         for word in words:
             test_line = ' '.join(current_line + [word]) if current_line else word
-            # Usar stringWidth para medir exactamente el ancho del texto
             test_width = c.stringWidth(test_line, font_name, font_size)
             
             if test_width <= max_width:
                 current_line.append(word)
             else:
-                # Si la línea actual tiene contenido, guardarla
                 if current_line:
                     lines.append(' '.join(current_line))
-                # Si una palabra individual es más larga que el ancho máximo, dividirla
                 if c.stringWidth(word, font_name, font_size) > max_width:
-                    # Dividir palabra larga
                     chars = list(word)
                     temp_word = ""
                     for char in chars:
@@ -265,7 +247,6 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
         if current_line:
             lines.append(' '.join(current_line))
         
-        # Dibujar las líneas
         for line in lines:
             if y < bottom_margin + 1.5 * cm:
                 y = nueva_pagina()
@@ -285,7 +266,6 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
             return y - 0.7 * cm
             
         for i, obs in enumerate(obs_list, 1):
-            # Verificar si necesitamos nueva página ANTES de dibujar
             if y < bottom_margin + 3 * cm:
                 y = nueva_pagina()
                 
@@ -295,37 +275,90 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
             y -= 0.5 * cm
             
             c.setFont("Helvetica", 10.5)
-            # Usar la función mejorada para wrap de texto
             y = draw_wrapped_text(obs, left_margin, y, available_width, "Helvetica", 10.5)
             y -= 0.3 * cm
             
         return y
 
-    bloques = [
-        ("Observaciones de Formato", final_dict.get("formato", [])),
-        ("Observaciones del Nombre del Archivo", final_dict.get("archivo", [])),
-        ("Observaciones de Nombres de Columnas", final_dict.get("columnas", [])),
-        ("Observaciones de Filas/Datos", final_dict.get("datos", []))
-    ]
-    
-    for titulo, lista in bloques:
-        y = draw_block(titulo, lista, y)
-        y -= 0.3 * cm
+    # VERIFICAR SI NO HAY ERRORES - CORREGIDO
+    def tiene_errores_verdadero():
+        formato = final_dict.get("formato", [])
+        if len(formato) > 1 or (len(formato) == 1 and not formato[0].startswith("No se encontraron")):
+            return True
+        
+        archivo = final_dict.get("archivo", [])
+        if len(archivo) > 1 or (len(archivo) == 1 and not archivo[0].startswith("No se encontraron")):
+            return True
+        
+        columnas = final_dict.get("columnas", [])
+        if len(columnas) > 1 or (len(columnas) == 1 and not columnas[0].startswith("No se encontraron")):
+            return True
+        
+        datos = final_dict.get("datos", [])
+        if len(datos) > 1 or (len(datos) == 1 and not datos[0].startswith("No se encontraron")):
+            return True
+        
+        return False
 
-    # Firma
+    tiene_errores = tiene_errores_verdadero()
+
+    if not tiene_errores:
+        c.setFont("Helvetica-Bold", 16)
+        mensaje_exito = "✓ VALIDACIÓN EXITOSA"
+        text_width = c.stringWidth(mensaje_exito, "Helvetica-Bold", 16)
+        x_position = (width - text_width) / 2
+        c.drawString(x_position, y, mensaje_exito)
+        y -= 1.2 * cm
+
+        c.setFont("Helvetica", 12)
+        mensaje_descripcion = "El documento no contiene errores."
+        text_width_desc = c.stringWidth(mensaje_descripcion, "Helvetica", 12)
+        x_position_desc = (width - text_width_desc) / 2
+        c.drawString(x_position_desc, y, mensaje_descripcion)
+        y -= 2.5 * cm
+
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(left_margin, y, "Resumen de Validaciones:")
+        y -= 0.7 * cm
+
+        validaciones = [
+            "✓ Formato del archivo: Correcto",
+            "✓ Nombre del archivo: Correcto", 
+            "✓ Nombres de columnas: Correctos",
+            "✓ Datos y filas: Correctos"
+        ]
+
+        c.setFont("Helvetica", 10.5)
+        for validacion in validaciones:
+            if y < bottom_margin + 2 * cm:
+                y = nueva_pagina()
+            c.drawString(left_margin + 0.5 * cm, y, validacion)
+            y -= 0.5 * cm
+
+    else:
+        bloques = [
+            ("Observaciones de Formato", final_dict.get("formato", [])),
+            ("Observaciones del Nombre del Archivo", final_dict.get("archivo", [])),
+            ("Observaciones de Nombres de Columnas", final_dict.get("columnas", [])),
+            ("Observaciones de Filas/Datos", final_dict.get("datos", []))
+        ]
+        
+        for titulo, lista in bloques:
+            y = draw_block(titulo, lista, y)
+            y -= 0.3 * cm
+
     if y < bottom_margin + 3 * cm:
         y = nueva_pagina()
 
     c.setFont("Helvetica-Bold", 11)
     c.drawCentredString(width / 2, bottom_margin + 3.0 * cm, "Atentamente")
     c.drawCentredString(width / 2, bottom_margin + 2.3 * cm, "Datos Abiertos")
-    c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Director de Innovación y Análisis de Datos")
+    c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Dirección de Innovación y Análisis de Datos")
 
     c.save()
     pdf_bytes = pdf_buffer.getvalue()
     pdf_buffer.close()
     
-    # Guardar también en archivo para verificación
     pdf_path = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
     with open(pdf_path, "wb") as f:
         f.write(pdf_bytes)
@@ -336,6 +369,8 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+# En la función validar() del archivo app.py, modifica esta parte:
 
 @app.route("/validar", methods=["POST"])
 def validar():
@@ -363,7 +398,29 @@ def validar():
         with open(os.path.join(RESULTS_FOLDER, f"final_{token}.json"), "w", encoding="utf-8") as f:
             json.dump(FINAL, f, ensure_ascii=False)
 
-        return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename)
+        # DETERMINAR SI PASA LA VALIDACIÓN
+        def pasa_validacion():
+            formato = FINAL.get("formato", [])
+            if len(formato) > 1 or (len(formato) == 1 and not formato[0].startswith("No se encontraron")):
+                return False
+            
+            archivo = FINAL.get("archivo", [])
+            if len(archivo) > 1 or (len(archivo) == 1 and not archivo[0].startswith("No se encontraron")):
+                return False
+            
+            columnas = FINAL.get("columnas", [])
+            if len(columnas) > 1 or (len(columnas) == 1 and not columnas[0].startswith("No se encontraron")):
+                return False
+            
+            datos = FINAL.get("datos", [])
+            if len(datos) > 1 or (len(datos) == 1 and not datos[0].startswith("No se encontraron")):
+                return False
+            
+            return True
+
+        pasa = pasa_validacion()
+
+        return render_template("resultados.html", token=token, FINAL=FINAL, nombre_archivo=filename, pasa=pasa)
     
     except Exception as e:
         return render_template("index.html", error=f"Error al procesar el archivo: {str(e)}")
