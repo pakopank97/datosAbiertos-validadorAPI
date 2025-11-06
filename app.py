@@ -2,7 +2,7 @@
 """
 Sistema: API-Validador-Formatos-Datos-Abiertos
 Autor: Mtro. Francisco Daniel Martínez Martínez
-Versión: v8.9.2 (Descarga PDF compatible Flask 1/2/3 + rutas absolutas)
+Versión: v8.9.3 (Flask 3 fix: startup via before_request + send_file compat + rutas absolutas)
 """
 import io, os, re, json, csv, time
 from datetime import datetime, timedelta
@@ -34,7 +34,7 @@ for folder in [UPLOAD_FOLDER, RESULTS_FOLDER, LOGOS_FOLDER, LOGS_FOLDER, REPORTS
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024  # 256MB
 
-# ---------------- UTILIDADES SEND_FILE (compat Flask) ----------------
+# ---------------- UTILIDAD SEND_FILE (compat Flask 1/2/3) ----------------
 _sf_params = signature(send_file).parameters
 _HAS_DOWNLOAD_NAME = "download_name" in _sf_params
 
@@ -49,8 +49,7 @@ def send_file_compat(fileobj_or_path, filename, **kwargs):
     if _HAS_DOWNLOAD_NAME:
         args["download_name"] = filename
     else:
-        # Compatibilidad Flask 1.x
-        args["attachment_filename"] = filename
+        args["attachment_filename"] = filename  # Compat Flask 1.x
     return send_file(fileobj_or_path, **args)
 
 # ---------------- MANEJO DE LOGS Y REPORTES ----------------
@@ -133,7 +132,6 @@ def validar_formato_y_carga(file_storage, filename, ext):
     if ext in ("xls", "xlsx"):
         try:
             import openpyxl
-            # Asegurar posición 0 si viene como BytesIO
             if hasattr(file_storage, "seek"):
                 file_storage.seek(0)
             wb = openpyxl.load_workbook(file_storage, read_only=True, data_only=True)
@@ -160,7 +158,6 @@ def validar_formato_y_carga(file_storage, filename, ext):
                         safe_row.append(str(cell))
                 safe_data.append(safe_row)
 
-            # Crear DataFrame
             df = pl.DataFrame(safe_data, schema=headers, orient="row") if headers else pl.DataFrame()
 
             empty_headers = [h for h in df.columns if (h is None or str(h).strip() in ("", " "))]
@@ -251,19 +248,19 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
             if os.path.exists(header_left):
                 c.drawImage(header_left, left_margin, height - 3.0 * cm,
                             width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
-        except Exception as _:
+        except Exception:
             pass
         try:
             if os.path.exists(header_right):
                 c.drawImage(header_right, width - 7.5 * cm, height - 3.0 * cm,
                             width=7.0 * cm, height=2.0 * cm, preserveAspectRatio=True, mask="auto")
-        except Exception as _:
+        except Exception:
             pass
         try:
             if os.path.exists(footer_img):
                 c.drawImage(footer_img, 0, 0.5 * cm,
                             width=width, height=2.5 * cm, preserveAspectRatio=True, mask="auto")
-        except Exception as _:
+        except Exception:
             pass
 
     def nueva_pagina():
@@ -409,7 +406,7 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
     c.drawCentredString(width / 2, bottom_margin + 1.6 * cm, "Dirección de Innovación y Análisis de Datos")
 
     c.save()
-    pdf_buffer.seek(0)  # <-- importante
+    pdf_buffer.seek(0)  # importante
     pdf_bytes = pdf_buffer.getvalue()
 
     # (Opcional) Guardar PDF temporal para auditoría
@@ -417,7 +414,7 @@ def construir_pdf(final_dict: dict, nombre_archivo: str, token: str) -> bytes:
         pdf_path = os.path.join(RESULTS_FOLDER, f"informe_{token}.pdf")
         with open(pdf_path, "wb") as f:
             f.write(pdf_bytes)
-    except Exception as _:
+    except Exception:
         pass
 
     return pdf_bytes
@@ -510,12 +507,12 @@ def descargar_pdf(token):
 
     buf = io.BytesIO(pdf_bytes)
     buf.seek(0)
-    # Cache off para evitar que el navegador guarde PDFs viejos
+    # Cache off para evitar PDFs viejos
     resp = send_file_compat(buf, f"informe_{token}.pdf", mimetype="application/pdf")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return resp
 
-# Limpieza programada de archivos temporales viejos
+# ---------------- Limpieza de temporales viejos ----------------
 def cleanup_old_temp_files(hours_old=24):
     """Elimina archivos temporales más viejos que 'hours_old' horas."""
     try:
@@ -526,16 +523,25 @@ def cleanup_old_temp_files(hours_old=24):
                 file_time = datetime.fromtimestamp(os.path.getctime(file_path))
                 if (current_time - file_time).total_seconds() > (hours_old * 3600):
                     os.remove(file_path)
-                    current_app.logger.info(f"Temporal eliminado: {filename}")
+                    # logging opcional: current_app.logger.info(...)
     except Exception as e:
-        current_app.logger.warning(f"Error en limpieza de temporales: {e}")
+        # logging opcional: current_app.logger.warning(...)
+        print(f"Error en limpieza de temporales: {e}")
 
-# Ejecutar limpieza al iniciar (válido para Gunicorn)
-@app.before_first_request
-def _startup_cleanup():
-    cleanup_old_temp_files()
+# ---- Arranque de limpieza compatible con Flask 3 (una sola vez por proceso) ----
+_startup_done = False
 
+@app.before_request
+def _run_startup_once():
+    global _startup_done
+    if not _startup_done:
+        try:
+            cleanup_old_temp_files()
+        finally:
+            _startup_done = True
+
+# ---------------- DEV LOCAL (opcional) ----------------
 if __name__ == "__main__":
-    # Modo dev local (NO producción)
+    # Para correr en local (Gunicorn no usa este bloque)
     cleanup_old_temp_files()
     app.run(host="0.0.0.0", port=8081, debug=True)
